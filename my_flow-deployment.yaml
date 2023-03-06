@@ -1,0 +1,51 @@
+###
+### A complete description of a Prefect Deployment for flow 'my-flow'
+###
+name: instagram_scraper
+description: null
+version: 89bd5f237437b313c9c30183be405a8a
+# The work queue that will handle this deployment's runs
+work_queue_name: default
+work_pool_name: null
+tags: []
+parameters: {}
+schedule: null
+is_schedule_active: null
+infra_overrides: {}
+infrastructure:
+  type: process
+  env: {}
+  labels: {}
+  name: null
+  command: null
+  stream_output: true
+  working_dir: null
+  block_type_slug: process
+  _block_type_slug: process
+
+###
+### DO NOT EDIT BELOW THIS LINE
+###
+flow_name: my-flow
+manifest_path: null
+storage: null
+path: /mnt/c/Users/jeffou/Documents/Python/Data_hoarding/instagram
+entrypoint: download_instagram_profile.py:my_flow
+parameter_openapi_schema:
+  title: Parameters
+  type: object
+  properties:
+    name:
+      title: name
+      position: 0
+      type: string
+    date:
+      title: date
+      position: 1
+      type: string
+      format: date-time
+  required:
+  - name
+  - date
+  definitions: null
+timestamp: '2023-03-05T17:47:21.300737+00:00'
