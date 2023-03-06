@@ -3,7 +3,7 @@
 - These data are then saved as csv files and export  manually to Preset.
 - On Preset, we can create dashboards.
 
-![preset dashobard](./images/Capture d’écran 2023-03-06 092856.jpg)
+![preset_dashobard](./images/Capture d’écran 2023-03-06 092856.jpg)
 
 ### Techs, softwares, librairies…
 - Prefect
