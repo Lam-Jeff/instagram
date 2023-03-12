@@ -8,6 +8,9 @@ from prefect_discord import DiscordWebhook
 import instagrapi
 import pandas as pd
 from pathlib import Path
+from varname import nameof
+import urllib.request
+from instagrapi.exceptions import LoginRequired
 
 # useful info in media :
 # pk code (real media ID)
@@ -18,22 +21,18 @@ from pathlib import Path
 # usertags (list de usertag)
 # resources (list of resource)
 
-# 1 table for all profiles, general infos
-# 1 table for each profile
-
-#max is 95 - to do only get everything once
-
 @task (name='Loading ENV',
        description='loading data from env file')
 def load_environment_variables ():
     load_dotenv()
-    PATH = os.getenv ('PATH')
+    PATH_DIRECTORY_IMAGES = os.getenv ('PATH_DIRECTORY_IMAGES')
+    PATH_DIRECTORY_CSV = os.getenv('PATH_DIRECTORY_CSV')
     USERNAMES = os.getenv ('USERNAMES')
     INSTAGRAM_USERNAME = os.getenv ('INSTAGRAM_USERNAME')
     INSTAGRAM_PASSWORD = os.getenv ('INSTAGRAM_PASSWORD')
     SESSION_FILE_PATH = os.getenv ('SESSION_FILE_PATH')
 
-    return PATH, USERNAMES, INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD, SESSION_FILE_PATH
+    return PATH_DIRECTORY_IMAGES, PATH_DIRECTORY_CSV, USERNAMES, INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD, SESSION_FILE_PATH
 
 
 @task (name='Get Data',
@@ -45,37 +44,54 @@ def get_data (usernames: str, client: object):
     usernames_list = usernames.split(',')
     medias_info = {
         'username': [],
-        'like_counts': [],
-        'comment_counts': [],
-        'resources': [],
+        'like_count': [],
+        'comment_count': [],
+        'pk_resources': [],
         'taken_at': []
     }
 
     profiles_info = {
         'username': usernames_list,
-        'follower_counts': [],
-        'media_counts': []
+        'follower_count': [],
+        'media_count': []
+    }
+
+    images_info = {
+        'pk_media': [],
+        'pk_image': [],
+        'url': []
     }
 
     for username in usernames_list:
         infos_dict = client.user_info_by_username(username).dict()
-        profiles_info['follower_counts'].append (infos_dict['follower_count'])
-        profiles_info['media_counts'].append (infos_dict['media_count'])
+        profiles_info['follower_count'].append (infos_dict['follower_count'])
+        profiles_info['media_count'].append (infos_dict['media_count'])
 
         user_id = client.user_id_from_username(username)
         medias = client.user_medias(user_id, NUMBER_MEDIAS)
         for media in medias:
             media_dict = media.dict()
             medias_info['username'].append (username)
-            medias_info['comment_counts'].append (media_dict['comment_count'])
-            medias_info['like_counts'].append (media_dict['like_count'])
-            medias_info['resources'].append (media_dict['resources'] or media_dict['thumbnail_url'])
+            medias_info['comment_count'].append (media_dict['comment_count'])
+            medias_info['like_count'].append (media_dict['like_count'])
+            medias_info['pk_resources'].append (media_dict['pk'])
             medias_info['taken_at'].append (media_dict['taken_at'].date().isoformat())
 
-    return profiles_info, medias_info
+            if media_dict['resources']:
+                for media in media_dict['resources']:
+                    images_info['pk_media'].append (media_dict['pk'])
+                    images_info['pk_image'].append (media['pk'])
+                    images_info['url'].append (media['thumbnail_url'])
+            else :
+                images_info['pk_media'].append (media_dict['pk'])
+                images_info['pk_image'].append (media_dict['pk'])
+                images_info['url'].append (media_dict['thumbnail_url'])
+
+    return profiles_info, medias_info, images_info
 
 
-@task
+@task (name='Create Dataframe',
+       description='Create a Pandas dataframe.')
 def create_dataframes (data: dict):
     df = pd.DataFrame(data)
     print (df.head(10))
@@ -96,28 +112,82 @@ def instagram_connection (username: str, password: str, session_file_path: str):
 
     if Path(session_file_path).is_file():
         client.load_settings(session_file_path)
-        client.login (username, password)
-    else:    
-        client.login (username, password)
-        client.dump_settings(session_file_path)
+    client.login (username, password)
+    
+    try:
+        client.account_info()
+    except LoginRequired:
+        client.relogin()
+
+    client.dump_settings(session_file_path)
     return client
 
-@flow (name='Save data')
-def save_data_subflow ():
-    pass
+
+@task (name='Data to CSV')
+def write_data_into_csv (data: pd.DataFrame, dict_name: str, path_to_directory: str):
+    if dict_name == 'df_medias':
+        if not Path(path_to_directory + '/medias.csv').is_file():
+            data.to_csv(path_to_directory + '/medias.csv', encoding='utf-8', index=False)
+        else:
+            csv_file = pd.read_csv(path_to_directory + '/medias.csv')
+            filter_column_like = csv_file['like_count'] != data['like_count']
+            filter_column_comment = csv_file['comment_count'] != data['comment_count']
+
+            csv_file.loc [filter_column_like, 'like_count'] = data['like_count']
+            csv_file.loc [filter_column_comment, 'comment_count'] = data['comment_count']
+            csv_file.to_csv(path_to_directory + '/medias.csv', encoding='utf-8', index=False)
+
+    elif dict_name == 'df_profiles' : # profiles
+        if not Path(path_to_directory + '/profiles.csv').is_file():
+            data.to_csv(path_to_directory + '/profiles.csv', encoding='utf-8', index=False)
+        else:
+            csv_file = pd.read_csv(path_to_directory + '/profiles.csv')
+            filter_column_follower = csv_file['follower_count'] != data['follower_count']
+            filter_column_media = csv_file['media_count'] != data['media_count']
+
+            csv_file.loc [filter_column_follower, 'follower_count'] = data['follower_count']
+            csv_file.loc [filter_column_media, 'media_count'] = data['media_count']
+            csv_file.to_csv(path_to_directory + '/profiles.csv', encoding='utf-8', index=False)
+            
+    else: 
+        if not Path(path_to_directory + '/images.csv').is_file():
+            data.to_csv(path_to_directory + '/images.csv', encoding='utf-8', index=False)
+        else:
+            csv_file = pd.read_csv (path_to_directory + '/images.csv')
+            i = 0
+            for _, row in data.iterrows():
+                if not csv_file['pk_image'].eq(int(row['pk_image'])).any() :
+                    csv_file = csv_file.append (row, ignore_index=True)
+                    i += 1
+            csv_file.to_csv(path_to_directory + '/images.csv', encoding='utf-8', index=False)
+            print (f"add {i} rows in the file")
+
+
+@task (name='Download images',
+       description='Download images from profiles and store them in PATH_DIRECTORY_IMAGES')
+def download_images (data: pd.DataFrame, local_destination: str) :
+    for _, row in data.iterrows():
+        pk_code = row['pk_image']
+        if not Path(local_destination + f'/{pk_code}.jpg').is_file():
+            link = row['url']
+            resultFilePath, responseHeaders = urllib.request.urlretrieve(link, local_destination + f'/{pk_code}.jpg')
+
 
 @flow (flow_run_name='{name}-on-{date}')
 def my_flow (name: str, date: datetime.datetime):
-    PATH, USERNAMES, INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD, SESSION_FILE_PATH = load_environment_variables()
+    PATH_DIRECTORY_IMAGES, PATH_DIRECTORY_CSV, USERNAMES, INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD, SESSION_FILE_PATH = load_environment_variables()
     client = instagram_connection (INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD, SESSION_FILE_PATH)
 
-    profiles, medias = get_data (USERNAMES, client)
+    profiles, medias, images = get_data (USERNAMES, client)
     df_profiles = create_dataframes (profiles)
     df_medias = create_dataframes (medias)
-    df_profiles.to_csv('profiles.csv', encoding='utf-8', index=False)
-    df_medias.to_csv('medias.csv', encoding='utf-8', index=False)
+    df_images = create_dataframes (images)
+
+    write_data_into_csv (df_profiles, nameof(df_profiles), PATH_DIRECTORY_CSV)
+    write_data_into_csv (df_medias, nameof(df_medias), PATH_DIRECTORY_CSV)
+    write_data_into_csv (df_images, nameof(df_images), PATH_DIRECTORY_CSV)
+    download_images (df_images, PATH_DIRECTORY_IMAGES)
     send_logs_to_discord()
 
 if __name__ == '__main__':
     my_flow(name="Name", date=datetime.datetime.utcnow())
-
